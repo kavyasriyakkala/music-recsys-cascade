@@ -1,4 +1,4 @@
-.PHONY: setup test lint smoke
+.PHONY: setup test lint smoke check-leakage
 
 setup:
 	pip install -e ".[dev]"
@@ -12,3 +12,13 @@ lint:
 
 smoke:
 	python scripts/run_smoke.py --smoke
+
+check-leakage:
+	python -c "\
+from yc.data.synthetic import generate_dataset; \
+from yc.splits.builder import build_all_splits, check_leakage, SplitConfig; \
+events, _, _ = generate_dataset(); \
+splits = build_all_splits(events, SplitConfig(n_days=30)); \
+all_snaps = [s for v in splits.values() for s in v]; \
+check_leakage(all_snaps); \
+print('check-leakage passed: {} snapshots'.format(len(all_snaps)))"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 import polars as pl
 import pytest
 
@@ -42,7 +44,9 @@ def all_splits(small_events: pl.DataFrame) -> dict:
 def test_leakage(all_splits: dict) -> None:
     """No history event should have timestamp >= cutoff."""
     for name, snaps in all_splits.items():
-        check_leakage(snaps)  # must not raise
+        # Sample for CI speed; full check runs via `make check-leakage`
+        sample = random.Random(42).sample(snaps, min(500, len(snaps)))
+        check_leakage(sample)  # must not raise
 
 
 def test_leakage_catches_injection() -> None:
