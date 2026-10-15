@@ -1,4 +1,4 @@
-.PHONY: setup test lint smoke check-leakage
+.PHONY: setup test lint smoke check-leakage gates
 
 setup:
 	pip install -e ".[dev]"
@@ -12,6 +12,9 @@ lint:
 
 smoke:
 	python scripts/run_smoke.py --smoke
+
+gates:
+	python scripts/run_gates.py --data-dir $(DATA_DIR)
 
 check-leakage:
 	python -c "\

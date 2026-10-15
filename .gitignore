@@ -10,4 +10,4 @@ build/
 reports/
 *.parquet
 *.arrow
-data/
+/data/
