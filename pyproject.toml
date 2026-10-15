@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yambda-cascade"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2.0",
+    "polars>=0.20.0",
+    "pyarrow>=14.0.0",
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
+    "pyyaml>=6.0.1",
+    "scikit-learn>=1.4.0",
+    "faiss-cpu>=1.8.0",
+    "fastapi>=0.110.0",
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest-cov", "ipython"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

@@ -1,0 +1,20 @@
+dataset:
+  n_users: 50
+  n_items: 500
+  n_days: 25
+  n_latent: 3
+  embedding_dim: 16
+  embedding_coverage: 0.8
+  seed: 42
+
+splits:
+  n_days: 25
+  min_prior_events: 5
+  label_hours: 24
+  listen_plus_threshold: 0.5
+
+eval:
+  ks: [10, 50, 100]
+
+baselines:
+  popularity_window_days: 7
