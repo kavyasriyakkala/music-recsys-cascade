@@ -10,3 +10,4 @@ patience: 3
 temperature: 0.07
 top_k_eval: [100, 500, 1000]
 seed: 42
+retriever_train_window_days: 60

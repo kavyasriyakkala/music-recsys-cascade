@@ -26,6 +26,9 @@ class SplitConfig:
     label_hours: int = 24
     # Yambda dataset card: a listen is positive if played_ratio_pct > 50
     listen_plus_threshold: float = 0.5
+    # 60-day window chosen to balance training signal vs memory/time cost on
+    # 10K-user dataset. Configurable.
+    retriever_train_window_days: int = 60
 
 
 @dataclass
@@ -140,7 +143,7 @@ def build_all_splits(
     """Build all five splits.
 
     Window boundaries (measured back from the final day N = config.n_days - 1):
-      retriever_train:  label days 0 .. N-16
+      retriever_train:  label days max(0, N-16-window+1) .. N-16  (window = retriever_train_window_days)
       retriever_val:    label day  N-15
       rank_train:       label days N-14 .. N-3   (12 days, multi-snapshot)
       validation:       label day  N-2
@@ -155,7 +158,10 @@ def build_all_splits(
     def day_cutoff(d: int) -> int:
         return d * DAY_UNITS
 
-    retriever_train_cutoffs = [day_cutoff(d) for d in range(0, N - 15)]
+    window = config.retriever_train_window_days
+    train_end = N - 16  # last retriever_train label day (inclusive)
+    train_start = max(0, train_end - window + 1)
+    retriever_train_cutoffs = [day_cutoff(d) for d in range(train_start, train_end + 1)]
     retriever_val_cutoffs = [day_cutoff(N - 15)]
     rank_train_cutoffs = [day_cutoff(d) for d in range(N - 14, N - 2)]
     validation_cutoffs = [day_cutoff(N - 2)]
