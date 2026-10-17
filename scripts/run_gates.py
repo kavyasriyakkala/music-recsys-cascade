@@ -38,11 +38,17 @@ def _git_commit() -> str:
 
 
 def _find_events_path(data_dir: Path) -> Path:
-    for p in [data_dir / "multi_event.parquet", data_dir / "multi_event"]:
+    candidates = [
+        data_dir / "multi_event.parquet",
+        data_dir / "flat" / "50m" / "multi_event.parquet",
+        data_dir / "flat" / "multi_event.parquet",
+        data_dir / "multi_event",
+    ]
+    for p in candidates:
         if p.exists():
             return p
     raise FileNotFoundError(
-        f"Cannot find multi_event.parquet or multi_event/ in {data_dir}"
+        f"Cannot find multi_event.parquet in {data_dir}. Tried: {candidates}"
     )
 
 
