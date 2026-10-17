@@ -1,4 +1,4 @@
-.PHONY: setup test lint smoke check-leakage gates
+.PHONY: setup test lint smoke check-leakage gates train-retriever smoke-retriever
 
 setup:
 	pip install -e ".[dev]"
@@ -15,6 +15,19 @@ smoke:
 
 gates:
 	python scripts/run_gates.py --data-dir $(DATA_DIR)
+
+train-retriever:
+	python scripts/train_retriever.py \
+		--config configs/retriever.yaml \
+		--data-dir $(DATA_DIR) \
+		--output-dir $(OUTPUT_DIR)
+
+smoke-retriever:
+	python scripts/train_retriever.py \
+		--config configs/retriever.yaml \
+		--data-dir none \
+		--output-dir /tmp/retriever_smoke \
+		--smoke
 
 check-leakage:
 	python -c "\
