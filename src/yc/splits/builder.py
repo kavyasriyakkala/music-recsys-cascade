@@ -1,6 +1,6 @@
 """Day-based snapshot builder for Yambda-cascade.
 
-All timestamps are in 5-second units (global; UNVERIFIED for real data).
+All timestamps are in 5-second units (global; verified on real data — span is ~1504 days).
 A snapshot captures: user, cutoff time, positive items in [cutoff, cutoff+1day),
 and which of those are novel (never listened before cutoff).
 """

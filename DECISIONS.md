@@ -9,7 +9,9 @@ assumed from the dataset card or not yet checked.
 
 ## VERIFIED
 
-Nothing yet — no real data has been loaded.
+| # | Assumption | Evidence |
+|---|---|---|
+| V1 | Timestamps are global 5-second units (not per-user deltas) | Gate 1 on real data: only 5.11% of users have min_ts near zero; per-user deltas would show ~100%. Dataset spans 1504 days (~4.1 years) — full platform history. Split windows reference the last N days and are unchanged. |
 
 ---
 
@@ -17,7 +19,7 @@ Nothing yet — no real data has been loaded.
 
 | # | Assumption | Where Used | How to Verify |
 |---|---|---|---|
-| U1 | Timestamps are global integers in 5-second units (not per-user deltas) | splits/builder.py, data/synthetic.py, DAY_UNITS = 86400//5 = 17280 | Load real data, check that timestamps increase monotonically globally across users |
+| ~~U1~~ | ~~Timestamps are global integers in 5-second units~~ | Moved to VERIFIED as V1 |
 | U2 | A "Listen+" is defined as played_ratio_pct > 50 (threshold = 0.5) | SplitConfig.listen_plus_threshold, synthetic label generation | Confirm against official Yambda dataset card or benchmark protocol |
 | U3 | embeddings.parquet covers ~80% of the catalog | synthetic embedding_coverage = 0.8 | Count distinct item_ids in embeddings.parquet vs. multi_event |
 | U4 | Daily volume: average events per user per day is in low single digits to low tens | synthetic daily_rate in [2, 12] | Compute mean events/user/day on real data |
