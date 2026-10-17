@@ -66,39 +66,46 @@ def load_real_events(data_dir: str | Path) -> pl.DataFrame:
 
 def load_embeddings(
     data_dir: str | Path,
-    event_item_ids: set[int] | None = None,
+    item_ids_needed: set[int] | None = None,
 ) -> dict[int, np.ndarray]:
     """Load embeddings.parquet and return {item_id: normalized_embed array}.
 
-    If event_item_ids is provided, filters to items present in events (saves memory).
-    Uses the normalized_embed column.
+    Uses scan_parquet so only the rows for item_ids_needed are read into memory —
+    avoids loading the full ~13GB file when only a subset of items is required.
+    Uses the normalized_embed column (not embed).
     """
     data_dir = Path(data_dir)
     path = data_dir / "embeddings.parquet"
     if not path.exists():
         raise FileNotFoundError(f"embeddings.parquet not found in {data_dir}")
 
-    df = pl.read_parquet(path)
-    if event_item_ids is not None:
-        df = df.filter(pl.col("item_id").is_in(list(event_item_ids)))
-
-    if "normalized_embed" not in df.columns:
+    # Cheap column-only scan to verify schema and get total count.
+    lazy = pl.scan_parquet(path)
+    available_cols = lazy.collect_schema().names()
+    if "normalized_embed" not in available_cols:
         raise ValueError(
             f"embeddings.parquet missing 'normalized_embed' column. "
-            f"Present: {df.columns}"
+            f"Present: {available_cols}"
         )
 
+    total_in_file = lazy.select(pl.len()).collect().item()
+
+    if item_ids_needed is not None:
+        lazy = lazy.filter(pl.col("item_id").is_in(list(item_ids_needed)))
+
+    df = lazy.select(["item_id", "normalized_embed"]).collect()
+
     result: dict[int, np.ndarray] = {}
-    for row in df.select(["item_id", "normalized_embed"]).iter_rows():
-        iid, vec = row
+    for iid, vec in df.iter_rows():
         result[int(iid)] = np.array(vec, dtype=np.float32)
 
     if result:
         dim = next(iter(result.values())).shape[0]
-        total_items = len(event_item_ids) if event_item_ids else "?"
+        total_needed = len(item_ids_needed) if item_ids_needed is not None else total_in_file
+        mb = len(result) * dim * 4 / 1024**2
         print(
-            f"Loaded {len(result)} embeddings (dim={dim}); "
-            f"coverage over events: {len(result)}/{total_items}"
+            f"Loading embeddings for {len(result)}/{total_needed} items "
+            f"({mb:.0f} MB estimated)"
         )
 
     return result

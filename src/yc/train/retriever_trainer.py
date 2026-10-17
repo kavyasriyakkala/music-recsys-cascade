@@ -14,11 +14,11 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-from yc.data.dataset import RetrieverDataset
+from yc.data.dataset import LazySnapshotIterator, RetrieverDataset, build_item2idx
 from yc.data.real_loader import load_embeddings, load_real_events
 from yc.eval.retriever_eval import evaluate_retriever
 from yc.models.two_tower import TwoTowerRetriever
-from yc.splits.builder import DAY_UNITS, SplitConfig, build_all_splits
+from yc.splits.builder import DAY_UNITS, SplitConfig, build_snapshots
 from yc.train.losses import in_batch_softmax_loss
 
 
@@ -88,7 +88,7 @@ def train_retriever(
     else:
         events_df = load_real_events(data_dir)
         item_ids_in_events = set(events_df["item_id"].unique().to_list())
-        embeddings = load_embeddings(data_dir, event_item_ids=item_ids_in_events)
+        embeddings = load_embeddings(data_dir, item_ids_needed=item_ids_in_events)
         n_days = 1504
         min_prior = cfg.get("min_prior_events", 50)
         n_epochs = cfg.get("n_epochs", 10)
@@ -104,44 +104,59 @@ def train_retriever(
     weight_decay: float = cfg.get("weight_decay", 1e-5)
     patience: int = cfg.get("patience", 3)
     top_k_eval: list[int] = cfg.get("top_k_eval", [100, 500, 1000])
+    window: int = cfg.get("retriever_train_window_days", 60)
 
-    # --- Splits ---
-    split_cfg = SplitConfig(
-        n_days=n_days,
-        min_prior_events=min_prior,
-    )
-    splits = build_all_splits(events_df, split_cfg)
+    # --- item2idx from events (cheap; no snapshots needed yet) ---
+    item2idx, idx2item = build_item2idx(events_df)
+    n_items = len(item2idx)
+
+    # --- Cutoff timestamps ---
+    N = n_days - 1
+    train_end = N - 16
+    train_start = max(0, train_end - window + 1)
+    train_cutoffs = [d * DAY_UNITS for d in range(train_start, train_end + 1)]
+
+    split_cfg = SplitConfig(n_days=n_days, min_prior_events=min_prior)
+
+    # Build val snapshots upfront (1 cutoff day — small).
+    val_cutoffs = [(N - 15) * DAY_UNITS]
+    val_snaps = build_snapshots(events_df, val_cutoffs, split_cfg)
     print(
-        f"Splits: retriever_train={len(splits['retriever_train'])} snapshots, "
-        f"retriever_val={len(splits['retriever_val'])} snapshots"
+        f"Training: {len(train_cutoffs)} cutoff days (lazy), "
+        f"val snapshots: {len(val_snaps)}"
     )
 
-    # --- Dataset & DataLoader ---
-    dataset = RetrieverDataset(
-        splits["retriever_train"], events_df, history_len=history_len
-    )
-    if len(dataset) == 0:
-        raise RuntimeError(
-            "RetrieverDataset is empty — no training samples. "
-            "Check that retriever_train snapshots have positives."
-        )
+    # Item frequency from events for SBC loss correction.
+    item_freq_iid = {
+        int(r[0]): int(r[1])
+        for r in events_df.group_by("item_id")
+        .agg(pl.len().alias("freq"))
+        .iter_rows()
+    }
+    item_freq = {item2idx[iid]: f for iid, f in item_freq_iid.items() if iid in item2idx}
 
-    # Map audio embeddings to item_idx using dataset.item2idx.
+    # --- Lazy training dataset ---
+    lazy_train = LazySnapshotIterator(
+        events=events_df,
+        config=split_cfg,
+        cutoff_timestamps=train_cutoffs,
+        item2idx=item2idx,
+        item_freq=item_freq,
+        history_len=history_len,
+    )
+
+    # Map audio embeddings to item_idx.
     audio_by_idx: dict[int, np.ndarray] = {
-        dataset.item2idx[iid]: arr
-        for iid, arr in embeddings.items()
-        if iid in dataset.item2idx
+        item2idx[iid]: arr for iid, arr in embeddings.items() if iid in item2idx
     }
 
     loader = DataLoader(
-        dataset,
+        lazy_train,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,  # LazySnapshotIterator shuffles internally
         num_workers=0,
         drop_last=True,
     )
-
-    n_items = len(dataset.item2idx)
 
     # --- Model ---
     model = TwoTowerRetriever(
@@ -152,7 +167,9 @@ def train_retriever(
     ).to(device)
 
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    total_steps = n_epochs * max(len(loader), 1)
+    # IterableDataset has no len(); estimate steps from window × users × positives / batch.
+    steps_per_epoch_est = max(len(train_cutoffs) * max(len(val_snaps), 10) // batch_size, 1)
+    total_steps = n_epochs * steps_per_epoch_est
     scheduler = LambdaLR(
         optimizer,
         lr_lambda=_cosine_with_warmup(warmup_steps, total_steps),
@@ -195,11 +212,11 @@ def train_retriever(
                 item_index = model.build_item_index(device=device)
                 val_metrics = evaluate_retriever(
                     model=model,
-                    snapshots=splits["retriever_val"],
+                    snapshots=val_snaps,
                     item_index=item_index,
-                    idx2item=dataset.idx2item,
+                    idx2item=idx2item,
                     events=events_df,
-                    item2idx=dataset.item2idx,
+                    item2idx=item2idx,
                     history_len=history_len,
                     ks=top_k_eval,
                     device=device,
@@ -248,11 +265,11 @@ def train_retriever(
         item_index = model.build_item_index(device=device)
         val_metrics = evaluate_retriever(
             model=model,
-            snapshots=splits["retriever_val"],
+            snapshots=val_snaps,
             item_index=item_index,
-            idx2item=dataset.idx2item,
+            idx2item=idx2item,
             events=events_df,
-            item2idx=dataset.item2idx,
+            item2idx=item2idx,
             history_len=history_len,
             ks=top_k_eval,
             device=device,
