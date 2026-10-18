@@ -14,6 +14,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
+import pickle
+
 from yc.data.dataset import LazySnapshotIterator, RetrieverDataset, build_item2idx
 from yc.data.real_loader import load_embeddings, load_real_events
 from yc.eval.retriever_eval import evaluate_retriever
@@ -123,9 +125,20 @@ def train_retriever(
 
     split_cfg = SplitConfig(n_days=n_days, min_prior_events=min_prior)
 
-    # Build val snapshots upfront (1 cutoff day — small).
-    val_cutoffs = [(N - 15) * DAY_UNITS]
-    val_snaps = build_snapshots(events_df, val_cutoffs, split_cfg)
+    # Load val snapshots from cache if available; otherwise build and cache.
+    splits_cache = out_dir / "splits.pkl"
+    if splits_cache.exists():
+        with open(splits_cache, "rb") as _f:
+            _cached = pickle.load(_f)
+        val_snaps = _cached["retriever_val"]
+        print("Loaded splits from cache", flush=True)
+    else:
+        val_cutoffs = [(N - 15) * DAY_UNITS]
+        val_snaps = build_snapshots(events_df, val_cutoffs, split_cfg)
+        with open(splits_cache, "wb") as _f:
+            pickle.dump({"retriever_val": val_snaps}, _f, protocol=pickle.HIGHEST_PROTOCOL)
+        print("Built splits, saved to cache", flush=True)
+
     print(
         f"Training: {len(train_cutoffs)} cutoff days (lazy), "
         f"val snapshots: {len(val_snaps)}",
