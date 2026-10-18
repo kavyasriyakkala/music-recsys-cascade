@@ -1,0 +1,23 @@
+l1:
+  neg_per_pos: 4
+  batch_size: 4096
+  lr: 0.001
+  weight_decay: 0.00001
+  n_epochs: 5
+  patience: 2
+  eval_every_n_steps: 200
+
+l2:
+  neg_per_pos: 4
+  batch_size: 1024
+  lr: 0.0005
+  weight_decay: 0.00001
+  n_epochs: 5
+  patience: 2
+  eval_every_n_steps: 200
+  history_len: 100
+
+top_k_retrieval: 1000
+l1_top_k: 100
+l2_top_k: 10
+seed: 42
