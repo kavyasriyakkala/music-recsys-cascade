@@ -59,6 +59,10 @@ def train_retriever(
     np.random.seed(seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}", flush=True)
+    if torch.cuda.is_available():
+        print(f"GPU index: {torch.cuda.current_device()}", flush=True)
+        print(f"GPU name: {torch.cuda.get_device_name()}", flush=True)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,13 +212,23 @@ def train_retriever(
         history_len=history_len,
     )
 
-    loader = DataLoader(
-        lazy_train,
+    # num_workers>0 lets CPU workers prefetch batches while GPU trains, preventing
+    # GPU starvation from __getitem__ latency.  pin_memory speeds host→device transfer.
+    # persistent_workers avoids worker restart overhead per epoch.
+    # IterableDataset requires num_workers>0 with prefetch_factor only on torch>=2.0.
+    _num_workers = 0 if smoke else 4
+    _pin = device == "cuda"
+    loader_kwargs: dict = dict(
         batch_size=batch_size,
         shuffle=False,  # LazySnapshotIterator shuffles internally
-        num_workers=0,
+        num_workers=_num_workers,
         drop_last=True,
+        pin_memory=_pin,
     )
+    if _num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 2
+    loader = DataLoader(lazy_train, **loader_kwargs)
 
     stop_event.set()
     warmup_thread.join()

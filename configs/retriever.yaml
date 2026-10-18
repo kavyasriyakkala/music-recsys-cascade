@@ -1,7 +1,7 @@
 embed_dim: 128
 history_len: 100
 id_dropout_p: 0.1
-batch_size: 2048
+batch_size: 512
 lr: 0.001
 weight_decay: 0.00001
 n_epochs: 10
