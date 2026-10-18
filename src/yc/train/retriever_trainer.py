@@ -70,12 +70,10 @@ def train_retriever(
             embedding_dim=64,
             seed=seed,
         )
-        # Convert embeddings to {item_id: array}.
         embeddings: dict[int, np.ndarray] = {
             int(row["item_id"]): np.array(row["normalized_embed"], dtype=np.float32)
             for row in embeddings_df.iter_rows(named=True)
         }
-        # Filter events to listens (matching load_real_events behavior).
         events_df = events_df.filter(pl.col("event_type") == "listen").sort(
             ["uid", "timestamp"]
         )
@@ -86,9 +84,15 @@ def train_retriever(
         eval_every = 10
         warmup_steps = 5
     else:
+        print("Step 1: Loading events...", flush=True)
         events_df = load_real_events(data_dir)
+        print(f"Loaded {len(events_df)} events", flush=True)
+
+        print("Step 2: Loading embeddings...", flush=True)
         item_ids_in_events = set(events_df["item_id"].unique().to_list())
         embeddings = load_embeddings(data_dir, item_ids_needed=item_ids_in_events)
+        print("Embeddings loaded", flush=True)
+
         n_days = 1504
         min_prior = cfg.get("min_prior_events", 50)
         n_epochs = cfg.get("n_epochs", 10)
@@ -107,6 +111,7 @@ def train_retriever(
     window: int = cfg.get("retriever_train_window_days", 60)
 
     # --- item2idx from events (cheap; no snapshots needed yet) ---
+    print("Step 3: Building item index and splits...", flush=True)
     item2idx, idx2item = build_item2idx(events_df)
     n_items = len(item2idx)
 
@@ -123,7 +128,8 @@ def train_retriever(
     val_snaps = build_snapshots(events_df, val_cutoffs, split_cfg)
     print(
         f"Training: {len(train_cutoffs)} cutoff days (lazy), "
-        f"val snapshots: {len(val_snaps)}"
+        f"val snapshots: {len(val_snaps)}",
+        flush=True,
     )
 
     # Item frequency from events for SBC loss correction.
@@ -136,6 +142,7 @@ def train_retriever(
     item_freq = {item2idx[iid]: f for iid, f in item_freq_iid.items() if iid in item2idx}
 
     # --- Lazy training dataset ---
+    print("Step 4: Building dataset...", flush=True)
     lazy_train = LazySnapshotIterator(
         events=events_df,
         config=split_cfg,
@@ -157,6 +164,8 @@ def train_retriever(
         num_workers=0,
         drop_last=True,
     )
+
+    print("Starting training...", flush=True)
 
     # --- Model ---
     model = TwoTowerRetriever(

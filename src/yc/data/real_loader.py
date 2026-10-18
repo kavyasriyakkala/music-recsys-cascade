@@ -64,36 +64,54 @@ def load_real_events(data_dir: str | Path) -> pl.DataFrame:
     return df.sort(["uid", "timestamp"])
 
 
+def _find_embeddings_path(data_dir: Path) -> Path:
+    """Return the embeddings file to load.
+
+    Prefers embeddings_50m.parquet (pre-filtered by prefilter_embeddings.py)
+    to avoid scanning the full 13GB embeddings.parquet at training time.
+    """
+    for p in [
+        data_dir / "embeddings_50m.parquet",
+        data_dir / "embeddings.parquet",
+    ]:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"No embeddings file found in {data_dir}. "
+        f"Tried: embeddings_50m.parquet, embeddings.parquet. "
+        f"Run scripts/prefilter_embeddings.py to create embeddings_50m.parquet."
+    )
+
+
 def load_embeddings(
     data_dir: str | Path,
     item_ids_needed: set[int] | None = None,
 ) -> dict[int, np.ndarray]:
-    """Load embeddings.parquet and return {item_id: normalized_embed array}.
+    """Load embeddings and return {item_id: normalized_embed array}.
 
-    Uses scan_parquet so only the rows for item_ids_needed are read into memory —
-    avoids loading the full ~13GB file when only a subset of items is required.
+    Prefers embeddings_50m.parquet (pre-filtered) over embeddings.parquet.
+    Uses scan_parquet with predicate pushdown; never collects a full-file row count.
     Uses the normalized_embed column (not embed).
     """
     data_dir = Path(data_dir)
-    path = data_dir / "embeddings.parquet"
-    if not path.exists():
-        raise FileNotFoundError(f"embeddings.parquet not found in {data_dir}")
+    path = _find_embeddings_path(data_dir)
 
-    # Cheap column-only scan to verify schema and get total count.
-    lazy = pl.scan_parquet(path)
-    available_cols = lazy.collect_schema().names()
+    # Check schema without triggering a full scan.
+    lf = pl.scan_parquet(path)
+    available_cols = lf.collect_schema().names()
     if "normalized_embed" not in available_cols:
         raise ValueError(
-            f"embeddings.parquet missing 'normalized_embed' column. "
+            f"{path.name} missing 'normalized_embed' column. "
             f"Present: {available_cols}"
         )
 
-    total_in_file = lazy.select(pl.len()).collect().item()
-
     if item_ids_needed is not None:
-        lazy = lazy.filter(pl.col("item_id").is_in(list(item_ids_needed)))
+        lf = lf.filter(pl.col("item_id").is_in(list(item_ids_needed)))
 
-    df = lazy.select(["item_id", "normalized_embed"]).collect()
+    total_needed = len(item_ids_needed) if item_ids_needed is not None else "?"
+    print(f"Loading embeddings for up to {total_needed} items from {path.name}...", flush=True)
+
+    df = lf.select(["item_id", "normalized_embed"]).collect()
 
     result: dict[int, np.ndarray] = {}
     for iid, vec in df.iter_rows():
@@ -101,11 +119,10 @@ def load_embeddings(
 
     if result:
         dim = next(iter(result.values())).shape[0]
-        total_needed = len(item_ids_needed) if item_ids_needed is not None else total_in_file
         mb = len(result) * dim * 4 / 1024**2
         print(
-            f"Loading embeddings for {len(result)}/{total_needed} items "
-            f"({mb:.0f} MB estimated)"
+            f"Loaded {len(result)} embeddings (dim={dim}, {mb:.0f} MB estimated)",
+            flush=True,
         )
 
     return result
