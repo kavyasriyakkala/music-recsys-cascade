@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -112,11 +113,52 @@ def train_retriever(
     top_k_eval: list[int] = cfg.get("top_k_eval", [100, 500, 1000])
     window: int = cfg.get("retriever_train_window_days", 60)
 
-    # --- item2idx from events (cheap; no snapshots needed yet) ---
-    print("Step 3: Building item index and splits...", flush=True)
+    # --- item2idx + model (build model early so GPU warmup can start) ---
+    print("Step 3: Building item index...", flush=True)
     item2idx, idx2item = build_item2idx(events_df)
     n_items = len(item2idx)
 
+    # Map audio embeddings to item_idx (needed for model constructor).
+    audio_by_idx: dict[int, np.ndarray] = {
+        item2idx[iid]: arr for iid, arr in embeddings.items() if iid in item2idx
+    }
+
+    # Build and move model to device before expensive data-prep steps so the
+    # GPU warmup thread can keep utilisation up during snapshot/dataset build.
+    model = TwoTowerRetriever(
+        n_items=n_items,
+        embed_dim=embed_dim,
+        audio_embeddings=audio_by_idx,
+        id_dropout_p=id_dropout_p,
+    ).to(device)
+
+    # --- GPU warmup thread ---
+    # NYU HPC cancels jobs with <50% GPU utilisation; keep the GPU busy while
+    # we build val snapshots and the training dataset below.
+    def _keep_gpu_warm(
+        model: TwoTowerRetriever,
+        device: str,
+        stop_event: threading.Event,
+        history_len: int,
+    ) -> None:
+        dummy_h = torch.zeros(4, history_len, dtype=torch.long, device=device)
+        dummy_m = torch.zeros(4, history_len, dtype=torch.bool, device=device)
+        dummy_i = torch.ones(4, dtype=torch.long, device=device)
+        while not stop_event.is_set():
+            with torch.no_grad():
+                _ = model(dummy_h, dummy_m, dummy_i)
+            stop_event.wait(30)
+
+    stop_event = threading.Event()
+    warmup_thread = threading.Thread(
+        target=_keep_gpu_warm,
+        args=(model, device, stop_event, history_len),
+        daemon=True,
+    )
+    warmup_thread.start()
+    print("GPU warmup thread started", flush=True)
+
+    # --- Splits and dataset (may be slow on first run; warmup runs concurrently) ---
     # --- Cutoff timestamps ---
     N = n_days - 1
     train_end = N - 16
@@ -133,6 +175,7 @@ def train_retriever(
         val_snaps = _cached["retriever_val"]
         print("Loaded splits from cache", flush=True)
     else:
+        print("Step 4: Building val snapshots (first run, may take a while)...", flush=True)
         val_cutoffs = [(N - 15) * DAY_UNITS]
         val_snaps = build_snapshots(events_df, val_cutoffs, split_cfg)
         with open(splits_cache, "wb") as _f:
@@ -155,7 +198,7 @@ def train_retriever(
     item_freq = {item2idx[iid]: f for iid, f in item_freq_iid.items() if iid in item2idx}
 
     # --- Lazy training dataset ---
-    print("Step 4: Building dataset...", flush=True)
+    print("Step 5: Building dataset...", flush=True)
     lazy_train = LazySnapshotIterator(
         events=events_df,
         config=split_cfg,
@@ -165,11 +208,6 @@ def train_retriever(
         history_len=history_len,
     )
 
-    # Map audio embeddings to item_idx.
-    audio_by_idx: dict[int, np.ndarray] = {
-        item2idx[iid]: arr for iid, arr in embeddings.items() if iid in item2idx
-    }
-
     loader = DataLoader(
         lazy_train,
         batch_size=batch_size,
@@ -178,15 +216,11 @@ def train_retriever(
         drop_last=True,
     )
 
-    print("Starting training...", flush=True)
+    stop_event.set()
+    warmup_thread.join()
+    print("GPU warmup stopped, starting real training", flush=True)
 
-    # --- Model ---
-    model = TwoTowerRetriever(
-        n_items=n_items,
-        embed_dim=embed_dim,
-        audio_embeddings=audio_by_idx,
-        id_dropout_p=id_dropout_p,
-    ).to(device)
+    print("Starting training...", flush=True)
 
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     # IterableDataset has no len(); estimate steps from window × users × positives / batch.

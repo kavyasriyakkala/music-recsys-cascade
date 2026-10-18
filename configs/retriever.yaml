@@ -5,7 +5,7 @@ batch_size: 2048
 lr: 0.001
 weight_decay: 0.00001
 n_epochs: 10
-eval_every_n_steps: 500
+eval_every_n_steps: 100
 patience: 3
 temperature: 0.07
 top_k_eval: [100, 500, 1000]

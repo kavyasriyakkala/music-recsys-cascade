@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -40,6 +41,10 @@ class RetrieverDataset(Dataset):
 
     Each sample is (user_history, positive_item_id).  Item ids are mapped to
     1-based indices; 0 is reserved for padding.
+
+    __init__ builds only a flat index (snapshot_idx, pos_item_id); history
+    tensors are constructed lazily in __getitem__ to avoid materialising
+    O(n_snapshots × history_len) integers in memory upfront.
     """
 
     def __init__(
@@ -49,7 +54,11 @@ class RetrieverDataset(Dataset):
         history_len: int = 100,
     ) -> None:
         super().__init__()
+        t0 = time.time()
+        print(f"Building dataset index from {len(snapshots)} snapshots...", flush=True)
+
         self.history_len = history_len
+        self.snapshots = snapshots
 
         # Build item2idx: sorted for determinism; 0 reserved for padding.
         all_item_ids = sorted(events["item_id"].unique().to_list())
@@ -58,48 +67,49 @@ class RetrieverDataset(Dataset):
         }
         self.idx2item: dict[int, int] = {v: k for k, v in self.item2idx.items()}
 
-        # Pre-group events by user.
-        user_event_index = _build_user_event_index(events)
+        # User event index for fast per-user lookup in __getitem__.
+        self._user_event_index = _build_user_event_index(events)
 
-        # Count item frequencies as positives (for SBC loss correction).
+        # Flat index: (snapshot_idx, pos_item_id) — no history tensors yet.
+        self._flat: list[tuple[int, int]] = []
         _freq: dict[int, int] = {}
 
-        # Build flat sample list: (padded_history_indices, positive_idx).
-        self._samples: list[tuple[list[int], int]] = []
-
-        for snap in snapshots:
-            uid = snap.uid
-            cutoff = snap.cutoff
-            user_evts = user_event_index.get(uid, [])
-
-            hist_items = [
-                iid for ts, iid in user_evts if ts < cutoff
-            ][-history_len:]
-
-            hist_indices = [self.item2idx.get(iid, 0) for iid in hist_items]
-            padded = [0] * (history_len - len(hist_indices)) + hist_indices
-
+        for snap_idx, snap in enumerate(snapshots):
             for pos_iid in snap.positives:
                 pos_idx = self.item2idx.get(pos_iid, 0)
                 if pos_idx == 0:
                     continue
-                self._samples.append((padded, pos_idx))
+                self._flat.append((snap_idx, pos_iid))
                 _freq[pos_idx] = _freq.get(pos_idx, 0) + 1
 
         self._item_freq = _freq
+        print(
+            f"Dataset index ready: {len(self)} samples in {time.time() - t0:.1f}s",
+            flush=True,
+        )
 
     def __len__(self) -> int:
-        return len(self._samples)
+        return len(self._flat)
 
     def __getitem__(self, idx: int) -> dict:
-        hist, pos = self._samples[idx]
-        hist_t = torch.tensor(hist, dtype=torch.long)
+        snap_idx, pos_iid = self._flat[idx]
+        snap = self.snapshots[snap_idx]
+
+        user_evts = self._user_event_index.get(snap.uid, [])
+        hist_items = [iid for ts, iid in user_evts if ts < snap.cutoff][
+            -self.history_len :
+        ]
+        hist_indices = [self.item2idx.get(iid, 0) for iid in hist_items]
+        padded = [0] * (self.history_len - len(hist_indices)) + hist_indices
+
+        pos_idx = self.item2idx.get(pos_iid, 0)
+        hist_t = torch.tensor(padded, dtype=torch.long)
         return {
             "history": hist_t,
             "history_mask": hist_t != 0,
-            "positive": torch.tensor(pos, dtype=torch.long),
+            "positive": torch.tensor(pos_idx, dtype=torch.long),
             "item_freq": torch.tensor(
-                float(self._item_freq.get(pos, 1)), dtype=torch.float32
+                float(self._item_freq.get(pos_idx, 1)), dtype=torch.float32
             ),
         }
 
@@ -122,12 +132,20 @@ class LazySnapshotIterator(IterableDataset):
         history_len: int = 100,
     ) -> None:
         super().__init__()
+        t0 = time.time()
+        n_cutoffs = len(cutoff_timestamps)
+        print(f"Building dataset index from {n_cutoffs} cutoff days...", flush=True)
         self.events = events
         self.config = config
         self.cutoffs = cutoff_timestamps
         self.item2idx = item2idx
         self.item_freq = item_freq
         self.history_len = history_len
+        print(
+            f"Dataset index ready: {n_cutoffs} cutoff days (lazy) in "
+            f"{time.time() - t0:.1f}s",
+            flush=True,
+        )
 
     def __iter__(self):
         from yc.splits.builder import build_snapshots
