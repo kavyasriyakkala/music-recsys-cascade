@@ -216,7 +216,7 @@ def train_retriever(
     # GPU starvation from __getitem__ latency.  pin_memory speeds host→device transfer.
     # persistent_workers avoids worker restart overhead per epoch.
     # IterableDataset requires num_workers>0 with prefetch_factor only on torch>=2.0.
-    _num_workers = 0 if smoke else 4
+    _num_workers = 0  # num_workers>0 deadlocks inside apptainer on HPC clusters
     _pin = device == "cuda"
     loader_kwargs: dict = dict(
         batch_size=batch_size,
