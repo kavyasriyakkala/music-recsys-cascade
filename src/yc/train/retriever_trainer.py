@@ -197,9 +197,11 @@ def train_retriever(
             pickle.dump({"retriever_val": val_snaps}, _f, protocol=pickle.HIGHEST_PROTOCOL)
         print("Built splits, saved to cache", flush=True)
 
+    n_val_with_pos = sum(1 for s in val_snaps if len(s.positives) > 0)
     print(
         f"Training: {len(train_cutoffs)} cutoff days (lazy), "
-        f"val snapshots: {len(val_snaps)}",
+        f"val snapshots: {len(val_snaps)} "
+        f"({n_val_with_pos} with >=1 positive)",
         flush=True,
     )
 
@@ -212,6 +214,18 @@ def train_retriever(
     }
     item_freq = {item2idx[iid]: f for iid, f in item_freq_iid.items() if iid in item2idx}
 
+    # Events-in-window count to detect sparse training regions.
+    start_ts = train_cutoffs[0] if train_cutoffs else 0
+    end_ts = (train_cutoffs[-1] + DAY_UNITS) if train_cutoffs else 0
+    day_counts = events_df.filter(
+        pl.col("timestamp").is_between(start_ts, end_ts)
+    ).shape[0]
+    print(
+        f"[data] events in {len(train_cutoffs)}-day training window "
+        f"(ts {start_ts}–{end_ts}): {day_counts:,}",
+        flush=True,
+    )
+
     # --- Lazy training dataset ---
     print("Step 5: Building dataset...", flush=True)
     lazy_train = LazySnapshotIterator(
@@ -221,6 +235,12 @@ def train_retriever(
         item2idx=item2idx,
         item_freq=item_freq,
         history_len=history_len,
+    )
+    print(
+        f"[dataset] n_items: {len(item2idx):,} | "
+        f"train cutoffs: {len(train_cutoffs)} | "
+        f"min_prior_events: {min_prior}",
+        flush=True,
     )
 
     # num_workers>0 lets CPU workers prefetch batches while GPU trains, preventing
@@ -278,14 +298,20 @@ def train_retriever(
 
             if global_step == 0:
                 import math as _math
+                actual_bs = len(user_emb)
                 u_norm = user_emb.norm(dim=-1).mean().item()
                 i_norm = item_emb.norm(dim=-1).mean().item()
+                print(
+                    f"[batch] actual batch_size: {actual_bs} "
+                    f"(configured: {batch_size})",
+                    flush=True,
+                )
                 print(
                     f"[sanity] first batch — "
                     f"user_emb norm: {u_norm:.3f} (expect ~1.0) | "
                     f"item_emb norm: {i_norm:.3f} (expect ~1.0) | "
                     f"loss: {loss.item():.3f} "
-                    f"(expect ~{_math.log(len(user_emb)):.1f} for batch_size={len(user_emb)})",
+                    f"(expect ~{_math.log(actual_bs):.1f} for batch_size={actual_bs})",
                     flush=True,
                 )
 
