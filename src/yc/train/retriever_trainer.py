@@ -47,11 +47,13 @@ def train_retriever(
     data_dir: str,
     output_dir: str,
     smoke: bool = False,
+    rebuild_splits: bool = False,
 ) -> None:
     """Full training loop for TwoTowerRetriever.
 
     In smoke mode: uses synthetic data, 2 epochs, batch_size=64, eval every 50 steps.
     Must complete in <2 minutes on CPU.
+    rebuild_splits: delete splits.pkl cache and rebuild from scratch.
     """
     cfg = _load_config(config_path)
     seed: int = cfg.get("seed", 42)
@@ -121,6 +123,11 @@ def train_retriever(
     print("Step 3: Building item index...", flush=True)
     item2idx, idx2item = build_item2idx(events_df)
     n_items = len(item2idx)
+    print(
+        f"[sanity] unique items in events: {events_df['item_id'].n_unique()} | "
+        f"item2idx size: {n_items}",
+        flush=True,
+    )
 
     # Map audio embeddings to item_idx (needed for model constructor).
     audio_by_idx: dict[int, np.ndarray] = {
@@ -173,6 +180,10 @@ def train_retriever(
 
     # Load val snapshots from cache if available; otherwise build and cache.
     splits_cache = out_dir / "splits.pkl"
+    if rebuild_splits and splits_cache.exists():
+        splits_cache.unlink()
+        print("Deleted stale splits cache (--rebuild-splits)", flush=True)
+
     if splits_cache.exists():
         with open(splits_cache, "rb") as _f:
             _cached = pickle.load(_f)
@@ -264,6 +275,19 @@ def train_retriever(
 
             user_emb, item_emb = model(history, mask, positive_idx)
             loss = in_batch_softmax_loss(user_emb, item_emb, item_freqs, temperature)
+
+            if global_step == 0:
+                import math as _math
+                u_norm = user_emb.norm(dim=-1).mean().item()
+                i_norm = item_emb.norm(dim=-1).mean().item()
+                print(
+                    f"[sanity] first batch — "
+                    f"user_emb norm: {u_norm:.3f} (expect ~1.0) | "
+                    f"item_emb norm: {i_norm:.3f} (expect ~1.0) | "
+                    f"loss: {loss.item():.3f} "
+                    f"(expect ~{_math.log(len(user_emb)):.1f} for batch_size={len(user_emb)})",
+                    flush=True,
+                )
 
             optimizer.zero_grad()
             loss.backward()

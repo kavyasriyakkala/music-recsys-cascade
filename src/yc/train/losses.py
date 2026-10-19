@@ -31,9 +31,14 @@ def in_batch_softmax_loss(
     logits = user_emb @ item_emb.T / temperature
 
     # Log-frequency correction for off-diagonal negatives only.
-    log_corr = torch.log(item_freqs / item_freqs.sum())  # [B]
-    off_diag = 1.0 - torch.eye(logits.size(0), device=logits.device)
-    logits = logits - log_corr.unsqueeze(0) * off_diag
+    # Use log(freq) rather than log(freq/sum): the constant log(sum) adds the
+    # same large value to every off-diagonal logit, inflating the loss by ~log(N)
+    # without changing gradients.  Masking the diagonal prevents corrupting the
+    # positive-pair logit.
+    log_freqs = torch.log(item_freqs.clamp(min=1.0))       # [B]
+    correction = log_freqs.unsqueeze(0).expand_as(logits)  # [B, B]
+    diag_mask = torch.eye(logits.size(0), device=logits.device, dtype=torch.bool)
+    logits = logits - correction.masked_fill(diag_mask, 0.0)
 
     targets = torch.arange(logits.size(0), device=logits.device)
     return F.cross_entropy(logits, targets)

@@ -30,6 +30,8 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--rebuild-splits", action="store_true",
+                        help="Delete and rebuild splits.pkl cache from scratch")
     args = parser.parse_args()
 
     train_retriever(
@@ -37,4 +39,5 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         output_dir=args.output_dir,
         smoke=args.smoke,
+        rebuild_splits=args.rebuild_splits,
     )
