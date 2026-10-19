@@ -116,6 +116,7 @@ def train_retriever(
     lr: float = cfg.get("lr", 1e-3)
     weight_decay: float = cfg.get("weight_decay", 1e-5)
     patience: int = cfg.get("patience", 3)
+    min_epochs: int = cfg.get("min_epochs", 3)
     top_k_eval: list[int] = cfg.get("top_k_eval", [100, 500, 1000])
     window: int = cfg.get("retriever_train_window_days", 60)
 
@@ -366,10 +367,11 @@ def train_retriever(
                     )
                 else:
                     no_improve_count += 1
-                    if no_improve_count >= patience:
+                    if epoch >= min_epochs and no_improve_count >= patience:
                         print(
-                            f"Early stopping at step {global_step} "
-                            f"(no improvement for {patience} eval points)"
+                            f"Early stopping at step {global_step} epoch={epoch+1} "
+                            f"(no improvement for {patience} eval points; "
+                            f"min_epochs={min_epochs} satisfied)"
                         )
                         break
                 model.train()
@@ -377,6 +379,14 @@ def train_retriever(
                 running_loss += 0.0  # already accounted for above
 
         else:
+            # Epoch completed without early stop — print epoch-level recall.
+            epoch_r100 = eval_log[-1].get("recall@100", float("nan")) if eval_log else float("nan")
+            print(
+                f"[epoch] epoch={epoch+1}/{n_epochs} complete | "
+                f"best recall@100 so far: {best_recall:.4f} | "
+                f"last eval recall@100: {epoch_r100:.4f}",
+                flush=True,
+            )
             continue
         break  # inner loop broke due to early stopping
 

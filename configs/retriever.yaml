@@ -4,10 +4,11 @@ id_dropout_p: 0.1
 batch_size: 512
 lr: 0.001
 weight_decay: 0.00001
-n_epochs: 10
-eval_every_n_steps: 100
-patience: 3
-temperature: 0.07
+n_epochs: 20
+min_epochs: 5
+eval_every_n_steps: 500
+patience: 5
+temperature: 0.05
 top_k_eval: [100, 500, 1000]
 seed: 42
 retriever_train_window_days: 60
